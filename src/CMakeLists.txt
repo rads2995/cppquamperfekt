@@ -9,6 +9,11 @@ target_sources(cppquamperfekt
         FILES include/cppquamperfekt/cppquamperfekt.hpp
 )
 
+target_include_directories(cppquamperfekt 
+    INTERFACE
+        $ENV{ONEAPI_ROOT}/compiler/latest/include
+)
+
 install(
     TARGETS cppquamperfekt
     EXPORT cppquamperfektTargets

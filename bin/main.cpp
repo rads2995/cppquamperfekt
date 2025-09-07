@@ -9,8 +9,7 @@ int main() {
 
     sycl::device d;
     try {
-        // d = sycl::device(sycl::gpu_selector_v);
-        d = sycl::device(sycl::default_selector_v);
+        d = sycl::device(sycl::gpu_selector_v);
     } catch (sycl::exception const& e) {
         d = sycl::device(sycl::cpu_selector_v);
     }

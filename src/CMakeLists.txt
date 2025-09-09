@@ -12,6 +12,7 @@ target_sources(cppquamperfekt
 target_include_directories(cppquamperfekt 
     INTERFACE
         $ENV{ONEAPI_ROOT}/compiler/latest/include
+        $ENV{ONEAPI_ROOT}/dnnl/latest/include/
 )
 
 install(

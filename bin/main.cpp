@@ -7,7 +7,7 @@
 
 int main() {
 
-    constexpr int size = 1'000'000'000;
+    constexpr int size = 1'000'000;
     
     sycl::device d;
     try {

@@ -8,12 +8,17 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(googletest)
 
-target_compile_options(gtest PRIVATE -w)
-target_compile_options(gtest_main PRIVATE -w)
-target_compile_options(gmock PRIVATE -w)
-target_compile_options(gmock_main PRIVATE -w)
-
 add_executable(cppquamperfekt_test)
+
+target_compile_options(cppquamperfekt_test
+    PRIVATE
+        ${CXX_HARDENED_FLAGS}
+)
+
+target_link_options(cppquamperfekt_test
+    PRIVATE
+        ${LINKER_HARDENED_FLAGS}
+)
 
 target_sources(cppquamperfekt_test
     PRIVATE

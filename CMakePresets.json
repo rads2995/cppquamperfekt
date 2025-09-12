@@ -16,7 +16,7 @@
         "CMAKE_CXX_STANDARD": "20",
         "CMAKE_CXX_STANDARD_REQUIRED": "ON",
         "BUILD_TESTING": "ON",
-        "ONEDNN_CPU_RUNTIME": "SYCL",
+        "ONEDNN_CPU_RUNTIME": "TBB",
         "ONEDNN_GPU_RUNTIME": "SYCL",
         "ONEDNN_BUILD_DOC": "OFF",
         "ONEDNN_BUILD_EXAMPLES": "OFF",

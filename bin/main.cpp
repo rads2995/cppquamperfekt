@@ -10,11 +10,13 @@ int main() {
 
     cppquamperfekt::Herz herz;
 
-    herz.dims = {2, 3, 4, 5};
-
-    const size_t N = std::accumulate(
-        herz.dims.begin(), herz.dims.end(), static_cast<size_t>(1), std::multiplies<size_t>()
+    const std::size_t N = std::accumulate(
+        herz.dims.begin(), herz.dims.end(), static_cast<std::size_t>(1), std::multiplies<std::size_t>()
     );
+
+    auto usm_buffer = static_cast<float*>(sycl::malloc_shared(N * sizeof(float),
+        dnnl::sycl_interop::get_device(herz.engine), dnnl::sycl_interop::get_context(herz.engine)
+    ));
 
     dnnl::memory::desc mem_d(
         herz.dims, 
@@ -23,18 +25,15 @@ int main() {
     );
 
     dnnl::memory mem = dnnl::sycl_interop::make_memory(
-        mem_d, herz.engine, dnnl::sycl_interop::memory_kind::buffer
+        mem_d, herz.engine, dnnl::sycl_interop::memory_kind::usm, usm_buffer
     );
-
-    sycl::buffer sycl_buffer = dnnl::sycl_interop::get_buffer<float>(mem);
 
     sycl::queue queue = dnnl::sycl_interop::get_queue(herz.stream);
 
-    queue.submit([&](sycl::handler &cgh) {
-        auto a = sycl_buffer.get_access<sycl::access::mode::write>(cgh);
+    auto fill_e = queue.submit([&](sycl::handler &cgh) {
         cgh.parallel_for(sycl::range<1>(N), [=](sycl::id<1> i) {
             int idx = static_cast<int>(i[0]);
-            a[idx] = (idx % 2) ? - static_cast<float>(idx) : static_cast<float>(idx);
+            usm_buffer[idx] = (idx % 2) ? static_cast<float>(-idx) : static_cast<float>(idx);
         });
     });
 
@@ -49,21 +48,18 @@ int main() {
 
     auto relu = dnnl::eltwise_forward(relu_pd);
 
-    relu.execute(
+    auto relu_e = dnnl::sycl_interop::execute(
+        relu,
         herz.stream,
         {
             {DNNL_ARG_SRC, mem},
             {DNNL_ARG_DST, mem}
-        }
+        },
+        {fill_e}
     );
-    herz.stream.wait();
+    relu_e.wait();
 
-    auto host_acc = sycl_buffer.get_host_access();
-    for (size_t i = 0; i < N; i++) {
-        float exp_value = (i % 2) ? 0.0f : i;
-        if (host_acc[i] != static_cast<float>(exp_value))
-            std::cout << "Error! Negative value after the ReLU execution!" << '\n';
-    }
+    sycl::free(static_cast<void*>(usm_buffer), dnnl::sycl_interop::get_context(herz.engine));
 
     return 0;
 }

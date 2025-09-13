@@ -97,6 +97,42 @@ struct Herz {
         {{conv_weights_tz}, dnnl::memory::data_type::f32, dnnl::memory::format_tag::oihw},
         engine
     )};
+    dnnl::memory conv_user_bias_memory {dnnl::memory(
+        {{conv_bias_tz}, dnnl::memory::data_type::f32, dnnl::memory::format_tag::x},
+        engine
+    )};
+
+    // Create memory descriptors for convolution data w/ no specified
+    dnnl::memory::desc conv_src_md = dnnl::memory::desc(
+        {conv_src_tz}, dnnl::memory::data_type::f32, dnnl::memory::format_tag::any
+    );
+    dnnl::memory::desc conv_bias_md = dnnl::memory::desc(
+        {conv_bias_tz}, dnnl::memory::data_type::f32, dnnl::memory::format_tag::any
+    );
+    dnnl::memory::desc conv_weights_md = dnnl::memory::desc(
+        {conv_weights_tz}, dnnl::memory::data_type::f32, dnnl::memory::format_tag::any
+    );
+    dnnl::memory::desc conv_dst_md = dnnl::memory::desc(
+        {conv_dst_tz}, dnnl::memory::data_type::f32, dnnl::memory::format_tag::any
+    );
+
+    // Create a convolution primitive descriptor
+    dnnl::convolution_forward::primitive_desc conv_pd = dnnl::convolution_forward::primitive_desc(
+        engine,
+        dnnl::prop_kind::forward,
+        dnnl::algorithm::convolution_direct,
+        conv_src_md,
+        conv_weights_md,
+        conv_bias_md,
+        conv_dst_md,
+        conv_strides,
+        conv_padding,
+        conv_padding
+    );
+
+    dnnl::memory conv_src_memory = conv_user_src_memory;
+    dnnl::memory conv_weights_memory = conv_user_weights_memory;
+    dnnl::memory conv_dst_memory = dnnl::memory(conv_pd.dst_desc(), engine);
 
 };
 
@@ -198,6 +234,43 @@ inline cppquamperfekt::ReturnCode
 cppquamperfekt::Herz::execute() {
     this->write_to_dnnl_memory(this->net_src.data(), this->conv_user_src_memory);
     this->write_to_dnnl_memory(static_cast<void*>(this->conv_weights.data()), this->conv_user_weights_memory);
+    this->write_to_dnnl_memory(this->conv_bias.data(), this->conv_user_bias_memory);
+
+    // Create reorder primitives between user input and conv src if needed
+    if (this->conv_pd.src_desc() != this->conv_user_src_memory.get_desc()) {
+        this->conv_src_memory = dnnl::memory(this->conv_pd.src_desc(), this->engine);
+        this->net_fwd.push_back(dnnl::reorder(this->conv_user_src_memory, this->conv_src_memory));
+        this->net_fwd_args.push_back(
+            {
+                {DNNL_ARG_FROM, this->conv_user_src_memory},
+                {DNNL_ARG_TO, this->conv_src_memory}
+            }
+        );
+    }
+
+    if (this->conv_pd.weights_desc() != this->conv_user_weights_memory.get_desc()) {
+        this->conv_weights_memory = dnnl::memory(this->conv_pd.weights_desc(), this->engine);
+        this->net_fwd.push_back(dnnl::reorder(this->conv_user_weights_memory, this->conv_weights_memory));
+        this->net_fwd_args.push_back(
+            {
+                {DNNL_ARG_FROM, this->conv_user_weights_memory},
+                {DNNL_ARG_TO, this->conv_weights_memory}
+            }
+        );
+    }
+
+    // Finally, create a convolution primitive
+    this->net_fwd.push_back(dnnl::convolution_forward(this->conv_pd));
+    this->net_fwd_args.push_back(
+        {
+            {DNNL_ARG_SRC, this->conv_src_memory},
+            {DNNL_ARG_WEIGHTS, this->conv_weights_memory},
+            {DNNL_ARG_BIAS, this->conv_user_bias_memory},
+            {DNNL_ARG_DST, this->conv_dst_memory}
+        }
+    );
+
+    
 
     return ReturnCode::valid;
 }

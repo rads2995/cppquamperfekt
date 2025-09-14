@@ -25,6 +25,7 @@ struct Herz {
         dnnl::stream::flags stream_flags = dnnl::stream::flags::default_flags
     ) : engine(kind, index),
         stream(engine, stream_flags) {
+
             // Perform validation for constructed Herz object
             if (
                 validate_engine_kind() != ReturnCode::valid
@@ -32,28 +33,19 @@ struct Herz {
                 std::cout << "Failed to validate constructed Herz object!\n";
             }
 
-            // TODO: move everything after this to init() method?
-            conv_weights.resize(std::accumulate(
-                conv_weights_tz.begin(), 
-                conv_weights_tz.end(), 
+            conv1_weights.resize(std::accumulate(
+                conv1_weights_tz.begin(), 
+                conv1_weights_tz.end(), 
                 static_cast<std::size_t>(1), 
                 std::multiplies<std::size_t>()
             ));
-            // TODO: parallelize this to make it faster?
-            for (std::size_t i = 0; i < conv_weights.size(); ++i) {
-                conv_weights[i] = std::sinf(static_cast<float>(i));
-            }
 
-            conv_bias.resize(std::accumulate(
-                conv_bias_tz.begin(), 
-                conv_bias_tz.end(), 
+            conv1_bias.resize(std::accumulate(
+                conv1_bias_tz.begin(), 
+                conv1_bias_tz.end(), 
                 static_cast<std::size_t>(1), 
                 std::multiplies<std::size_t>()
             ));
-            // TODO: parallelize this to make it faster?
-            for (std::size_t i = 0; i < conv_bias.size(); ++i) {
-                conv_bias[i] = std::sinf(static_cast<float>(i));
-            }
         }
 
     ReturnCode validate_engine_kind();
@@ -61,81 +53,215 @@ struct Herz {
     ReturnCode write_to_dnnl_memory(void* handle, dnnl::memory& memory);
     ReturnCode execute();
 
+    // Create an engine and stream
     dnnl::engine engine;
     dnnl::stream stream; 
-    dnnl::memory::dims dims {2, 3, 4, 5}; 
 
-    std::vector<dnnl::primitive> net_fwd, net_bwd;
-    std::vector<std::unordered_map<int, dnnl::memory>> net_fwd_args, net_bwd_args;
+    // Create a vector for primitives and a vector to hold memory used as arguments
+    std::vector<dnnl::primitive> net;
+    std::vector<std::unordered_map<int, dnnl::memory>> net_args;
 
-    std::vector<float> net_src = []() {
-        std::vector<float> v(32 * 3 * 227 * 227);
-        // TODO: parallelize this to make it faster?
-        for (std::size_t i = 0; i < v.size(); ++i) {
-            v[i] = std::sinf(static_cast<float>(i));
-        }
-        return v;
-    }();
-    std::vector<float> net_dst{32 * 96 * 27 * 27};
+    static constexpr dnnl::memory::dim batch = 1;
+    
+    // AlexNet: conv1
+    // {batch, 3, 227, 227} (x) {96, 3, 11, 11} -> {batch, 96, 55, 55}
+    // strides: {4, 4}
+    dnnl::memory::dims conv1_src_tz {1, 3, 227, 227};
+    dnnl::memory::dims conv1_weights_tz {96, 3, 11, 11};
+    dnnl::memory::dims conv1_bias_tz {96};
+    dnnl::memory::dims conv1_dst_tz {1, 96, 55, 55};
+    dnnl::memory::dims conv1_strides {4, 4};
+    dnnl::memory::dims conv1_padding {0, 0};
 
-    dnnl::memory::dims conv_src_tz {32, 3, 227, 227};
-    dnnl::memory::dims conv_weights_tz {96, 3, 11, 11};
-    dnnl::memory::dims conv_bias_tz {96};
-    dnnl::memory::dims conv_dst_tz {32, 96, 55, 55};
-    dnnl::memory::dims conv_strides {4, 4};
-    dnnl::memory::dims conv_padding {0, 0};
+    // Allocate buffers for input and output data, weights, and bias
+    std::vector<float> user_src {std::vector<float>(batch * 3 * 227 * 227)};
+    std::vector<float> user_dst {std::vector<float>(1 * 1000)};
+    std::vector<float> conv1_weights;
+    std::vector<float> conv1_bias;
 
-    std::vector<float> conv_weights; 
-    std::vector<float> conv_bias;
-
-    // Create memory for user data
-    dnnl::memory conv_user_src_memory {dnnl::memory(
-        {{conv_src_tz}, dnnl::memory::data_type::f32, dnnl::memory::format_tag::nchw},
+    // Create memory that describes data layout in the buffers
+    dnnl::memory user_src_memory {dnnl::memory(
+        {{conv1_src_tz}, dnnl::memory::data_type::f32, dnnl::memory::format_tag::nchw},
         engine
     )};
-    dnnl::memory conv_user_weights_memory {dnnl::memory(
-        {{conv_weights_tz}, dnnl::memory::data_type::f32, dnnl::memory::format_tag::oihw},
+    dnnl::memory user_weights_memory {dnnl::memory(
+        {{conv1_weights_tz}, dnnl::memory::data_type::f32, dnnl::memory::format_tag::oihw},
         engine
     )};
-    dnnl::memory conv_user_bias_memory {dnnl::memory(
-        {{conv_bias_tz}, dnnl::memory::data_type::f32, dnnl::memory::format_tag::x},
+    dnnl::memory conv1_user_bias_memory {dnnl::memory(
+        {{conv1_bias_tz}, dnnl::memory::data_type::f32, dnnl::memory::format_tag::x},
         engine
     )};
 
-    // Create memory descriptors for convolution data w/ no specified
-    dnnl::memory::desc conv_src_md = dnnl::memory::desc(
-        {conv_src_tz}, dnnl::memory::data_type::f32, dnnl::memory::format_tag::any
+    // Create memory descriptors for convolution data w/ no specified layout
+    dnnl::memory::desc conv1_src_md = dnnl::memory::desc(
+        {conv1_src_tz}, dnnl::memory::data_type::f32, dnnl::memory::format_tag::any
     );
-    dnnl::memory::desc conv_bias_md = dnnl::memory::desc(
-        {conv_bias_tz}, dnnl::memory::data_type::f32, dnnl::memory::format_tag::any
+    dnnl::memory::desc conv1_bias_md = dnnl::memory::desc(
+        {conv1_bias_tz}, dnnl::memory::data_type::f32, dnnl::memory::format_tag::any
     );
-    dnnl::memory::desc conv_weights_md = dnnl::memory::desc(
-        {conv_weights_tz}, dnnl::memory::data_type::f32, dnnl::memory::format_tag::any
+    dnnl::memory::desc conv1_weights_md = dnnl::memory::desc(
+        {conv1_weights_tz}, dnnl::memory::data_type::f32, dnnl::memory::format_tag::any
     );
-    dnnl::memory::desc conv_dst_md = dnnl::memory::desc(
-        {conv_dst_tz}, dnnl::memory::data_type::f32, dnnl::memory::format_tag::any
+    dnnl::memory::desc conv1_dst_md = dnnl::memory::desc(
+        {conv1_dst_tz}, dnnl::memory::data_type::f32, dnnl::memory::format_tag::any
     );
 
     // Create a convolution primitive descriptor
-    dnnl::convolution_forward::primitive_desc conv_pd = dnnl::convolution_forward::primitive_desc(
+    dnnl::convolution_forward::primitive_desc 
+    conv1_prim_desc = dnnl::convolution_forward::primitive_desc(
         engine,
-        dnnl::prop_kind::forward,
+        dnnl::prop_kind::forward_inference,
         dnnl::algorithm::convolution_direct,
-        conv_src_md,
-        conv_weights_md,
-        conv_bias_md,
-        conv_dst_md,
-        conv_strides,
-        conv_padding,
-        conv_padding
+        conv1_src_md,
+        conv1_weights_md,
+        conv1_bias_md,
+        conv1_dst_md,
+        conv1_strides,
+        conv1_padding,
+        conv1_padding
     );
 
-    dnnl::memory conv_src_memory = conv_user_src_memory;
-    dnnl::memory conv_weights_memory = conv_user_weights_memory;
-    dnnl::memory conv_dst_memory = dnnl::memory(conv_pd.dst_desc(), engine);
+    dnnl::memory conv1_src_memory = user_src_memory;
+    dnnl::memory conv1_weights_memory = user_weights_memory;
+    
+    // Create a memory primitive for output
+    dnnl::memory conv1_dst_memory = dnnl::memory(conv1_prim_desc.dst_desc(), engine);
+ 
+    // AlexNet: relu1
+    // {batch, 96, 55, 55} -> {batch, 96, 55, 55}
+    
+    // Create ReLU primitive descriptor
+    dnnl::eltwise_forward::primitive_desc relu1_prim_desc =  dnnl::eltwise_forward::primitive_desc(
+        engine,
+        dnnl::prop_kind::forward_inference,
+        dnnl::algorithm::eltwise_relu,
+        conv1_dst_memory.get_desc(),
+        conv1_dst_memory.get_desc(),
+        0.0f
+    );
+
+    // AlexNet: lrn1
+    // {batch, 96, 55, 55} -> {batch, 96, 55, 55}
+    // local size: 5
+    // alpha1: 0.0001
+    // beta1: 0.75
+    const dnnl::memory::dim local1_size = 5;
+    const float alpha1 = 0.0001f;
+    const float beta1 = 0.75f;
+    const float k1 = 1.0f;
+    
+    // Create lrn primitive
+    dnnl::lrn_forward::primitive_desc lrn1_prim_desc = dnnl::lrn_forward::primitive_desc(
+        engine,
+        dnnl::prop_kind::forward_inference,
+        dnnl::algorithm::lrn_across_channels,
+        conv1_dst_memory.get_desc(),
+        conv1_dst_memory.get_desc(),
+        local1_size,
+        alpha1,
+        beta1,
+        k1
+    );
+
+    dnnl::memory lrn1_dst_memory = dnnl::memory(lrn1_prim_desc.dst_desc(), engine);
+
+    // AlexNet: pool1
+    // {batch, 96, 55, 55} -> {batch, 96, 27, 27}
+    // kernel: {3, 3}
+    // strides: {2, 2}
+    dnnl::memory::dims pool1_dst_tz {1, 96, 27, 27};
+    dnnl::memory::dims pool1_kernel {3, 3};
+    dnnl::memory::dims pool1_strides {2, 2};
+    dnnl::memory::dims pool_dilation {0, 0};
+    dnnl::memory::dims pool_padding {0, 0};
+
+    dnnl::memory::desc pool1_dst_md = dnnl::memory::desc(
+            {pool1_dst_tz}, dnnl::memory::data_type::f32, dnnl::memory::format_tag::any);
+
+    dnnl::pooling_forward::primitive_desc pool1_pd = dnnl::pooling_forward::primitive_desc(
+        engine,
+        dnnl::prop_kind::forward_inference, 
+        dnnl::algorithm::pooling_max,
+        lrn1_dst_memory.get_desc(), 
+        pool1_dst_md, 
+        pool1_strides,
+        pool1_kernel, 
+        pool_dilation, 
+        pool_padding, 
+        pool_padding
+    );
+    
+    dnnl::memory pool1_dst_memory = dnnl::memory(pool1_pd.dst_desc(), engine);
 
 };
 
+} // namespace cppquamperfekt
+
+inline cppquamperfekt::ReturnCode
+cppquamperfekt::Herz::execute() {
+    
+    this->write_to_dnnl_memory(this->user_src.data(), this->user_src_memory);
+    this->write_to_dnnl_memory(this->conv1_weights.data(), this->user_weights_memory);
+    this->write_to_dnnl_memory(this->conv1_bias.data(), this->conv1_user_bias_memory);
+
+    // Create reorder primitives between user input and conv src if needed
+    if (this->conv1_prim_desc.src_desc() != this->user_src_memory.get_desc()) {
+        std::cout << "Data format required by convolution different from user format!\n";
+        this->conv1_src_memory = dnnl::memory(this->conv1_prim_desc.src_desc(), this->engine);
+        this->net.push_back(dnnl::reorder(this->user_src_memory, this->conv1_src_memory));
+        this->net_args.push_back(
+            {
+                {DNNL_ARG_FROM, this->user_src_memory},
+                {DNNL_ARG_TO, this->conv1_src_memory}
+            }
+        );
+    }
+
+    if (this->conv1_prim_desc.weights_desc() != this->user_weights_memory.get_desc()) {
+        std::cout << "Weights format required by convolution different from user format!\n";
+        this->conv1_weights_memory = dnnl::memory(this->conv1_prim_desc.weights_desc(), this->engine);
+        dnnl::reorder(this->user_weights_memory, this->conv1_weights_memory)
+            .execute(this->stream, this->user_weights_memory, this->conv1_weights_memory);
+    }
+
+    // Create a convolution primitive and add it to the net
+    this->net.push_back(dnnl::convolution_forward(this->conv1_prim_desc));
+    this->net_args.push_back(
+        {
+            {DNNL_ARG_SRC, this->conv1_src_memory},
+            {DNNL_ARG_WEIGHTS, this->conv1_weights_memory},
+            {DNNL_ARG_BIAS, this->conv1_user_bias_memory},
+            {DNNL_ARG_DST, this->conv1_dst_memory}
+        }
+    );
+
+    // Create a relu primitive
+    this->net.push_back(dnnl::eltwise_forward(this->relu1_prim_desc));
+    this->net_args.push_back(
+        {
+            {DNNL_ARG_SRC, this->conv1_dst_memory},
+            {DNNL_ARG_DST, this->conv1_dst_memory}
+        }
+    );
+
+    this->net.push_back(dnnl::lrn_forward(this->lrn1_prim_desc));
+    this->net_args.push_back(
+        {
+            {DNNL_ARG_SRC, this->conv1_dst_memory},
+            {DNNL_ARG_DST, this->lrn1_dst_memory}
+        }
+    );
+
+    this->net.push_back(dnnl::pooling_forward(this->pool1_pd));
+    this->net_args.push_back(
+        {
+            {DNNL_ARG_SRC, this->lrn1_dst_memory},
+            {DNNL_ARG_DST, this->pool1_dst_memory}
+        }
+    );
+
+    return ReturnCode::valid;
 }
 
 inline cppquamperfekt::ReturnCode 
@@ -226,51 +352,6 @@ cppquamperfekt::Herz::write_to_dnnl_memory(void* handle, dnnl::memory& memory) {
         sycl::queue queue = dnnl::sycl_interop::get_queue(this->stream);
         queue.memcpy(dst_ptr, handle, size).wait();
     }
-
-    return ReturnCode::valid;
-}
-
-inline cppquamperfekt::ReturnCode
-cppquamperfekt::Herz::execute() {
-    this->write_to_dnnl_memory(this->net_src.data(), this->conv_user_src_memory);
-    this->write_to_dnnl_memory(static_cast<void*>(this->conv_weights.data()), this->conv_user_weights_memory);
-    this->write_to_dnnl_memory(this->conv_bias.data(), this->conv_user_bias_memory);
-
-    // Create reorder primitives between user input and conv src if needed
-    if (this->conv_pd.src_desc() != this->conv_user_src_memory.get_desc()) {
-        this->conv_src_memory = dnnl::memory(this->conv_pd.src_desc(), this->engine);
-        this->net_fwd.push_back(dnnl::reorder(this->conv_user_src_memory, this->conv_src_memory));
-        this->net_fwd_args.push_back(
-            {
-                {DNNL_ARG_FROM, this->conv_user_src_memory},
-                {DNNL_ARG_TO, this->conv_src_memory}
-            }
-        );
-    }
-
-    if (this->conv_pd.weights_desc() != this->conv_user_weights_memory.get_desc()) {
-        this->conv_weights_memory = dnnl::memory(this->conv_pd.weights_desc(), this->engine);
-        this->net_fwd.push_back(dnnl::reorder(this->conv_user_weights_memory, this->conv_weights_memory));
-        this->net_fwd_args.push_back(
-            {
-                {DNNL_ARG_FROM, this->conv_user_weights_memory},
-                {DNNL_ARG_TO, this->conv_weights_memory}
-            }
-        );
-    }
-
-    // Finally, create a convolution primitive
-    this->net_fwd.push_back(dnnl::convolution_forward(this->conv_pd));
-    this->net_fwd_args.push_back(
-        {
-            {DNNL_ARG_SRC, this->conv_src_memory},
-            {DNNL_ARG_WEIGHTS, this->conv_weights_memory},
-            {DNNL_ARG_BIAS, this->conv_user_bias_memory},
-            {DNNL_ARG_DST, this->conv_dst_memory}
-        }
-    );
-
-    
 
     return ReturnCode::valid;
 }
